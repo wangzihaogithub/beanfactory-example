@@ -2,13 +2,13 @@
 
  ---
 
-* 特色 : 这个容器只需要一个类即可{@link com.example.beanfactory.util.ApplicationX), 只依赖jdk, 不依赖任何包.
-
-* 这个文件{@link com.example.beanfactory.util.ApplicationX}是从 [https://github.com/wangzihaogithub/spring-boot-protocol](https://github.com/wangzihaogithub/spring-boot-protocol) 项目中单拉出来的.
+* 特色 : 这个容器只有一个类{@link com.example.beanfactory.util.ApplicationX), 只依赖jdk.
 
 * 查看具体实现 com.example.beanfactory.util.ApplicationX
 
 * 查看运行效果 com.example.beanfactory.BeanfactoryApplication.main()
+
+* 这个文件{@link com.example.beanfactory.util.ApplicationX}是从 [https://github.com/wangzihaogithub/spring-boot-protocol](https://github.com/wangzihaogithub/spring-boot-protocol) 项目中单拉出来的.
 
  ---
  
