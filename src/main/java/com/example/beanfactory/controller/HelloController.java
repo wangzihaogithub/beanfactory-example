@@ -6,6 +6,7 @@ import com.example.beanfactory.service.HelloService;
 import com.example.beanfactory.util.ApplicationX;
 
 import javax.annotation.Resource;
+import javax.sql.DataSource;
 import java.util.List;
 
 @Controller
@@ -15,6 +16,8 @@ public class HelloController implements ApplicationX.InitializingBean,Applicatio
     @ApplicationX.Autowired
     @ApplicationX.Qualifier("myHelloRepository")
     private HelloRepository helloRepository;
+    @Resource(name = "dataSource1")
+    private DataSource dataSource;
 
     @Resource
     private ApplicationX app;
