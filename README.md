@@ -12,6 +12,17 @@
 
  ---
  
+
+ - spring循环依赖的处理
+
+    循环依赖指 : bean在创建时, 因自动注入字段而触发的子bean又依赖正在创建的父bean. 
+    这时父bean还没创建完, 找不到父bean就会报错.
+    
+    解决方式 : 把正在创建的bean放到一个临时的map中, 这样子bean就能获取到了, 就解决了.
+ 
+ 
+  ---
+  
 作者邮箱 : 842156727@qq.com
 
 github地址 : [https://github.com/wangzihaogithub/beanfactory-example](https://github.com/wangzihaogithub/beanfactory-example)
