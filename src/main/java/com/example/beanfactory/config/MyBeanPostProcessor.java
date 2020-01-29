@@ -2,7 +2,7 @@ package com.example.beanfactory.config;
 
 import com.example.beanfactory.util.ApplicationX;
 
-@Configuration
+@ApplicationX.Component
 @ApplicationX.Order(Integer.MIN_VALUE + 100)
 public class MyBeanPostProcessor implements ApplicationX.BeanPostProcessor {
 

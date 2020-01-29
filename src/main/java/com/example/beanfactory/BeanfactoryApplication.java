@@ -4,6 +4,7 @@ import com.example.beanfactory.controller.HelloController;
 import com.example.beanfactory.entity.HelloPO;
 import com.example.beanfactory.util.ApplicationX;
 
+import javax.sql.DataSource;
 import java.util.List;
 
 /**
@@ -21,7 +22,7 @@ public class BeanfactoryApplication {
 
     public static void main(String[] args) {
         ApplicationX app = new ApplicationX();
-        app.scanner("com.example.beanfactory");
+        app.scanner("com.example.beanfactory").inject();
 
         System.out.println();
         System.out.println("applicationX = " + app);
@@ -39,7 +40,14 @@ public class BeanfactoryApplication {
         return new Thread("IO-Thread"){
             @Override
             public void run() {
-                HelloController controller = app.getBean(HelloController.class);
+                String[] beanNames = app.getBeanNamesForType(HelloController.class);
+                app.registerAlias(beanNames[0],"helloControllerAlias");
+
+                DataSource dataSource1 = app.getBean(DataSource.class);//用于测试单例多例
+                DataSource dataSource2 = app.getBean(DataSource.class);
+                System.out.println(Thread.currentThread()+" DataSource("+(dataSource1+"@"+dataSource1.hashCode()+","+dataSource2+"@"+dataSource2.hashCode()) + "), equals=" + (dataSource1 == dataSource2));
+
+                HelloController controller = app.getBean("helloControllerAlias");
                 for (int i = 1; i <= 3; i++) {
                     HelloPO helloPO = controller.findById(i);
                     System.out.println(Thread.currentThread()+" findById = " + helloPO);
