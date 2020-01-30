@@ -62,12 +62,17 @@ public class ApplicationX {
                 Arrays.asList(Order.class));
     private final Collection<Class<? extends Annotation>> factoryMethodAnnotations = new LinkedHashSet<>(
                 Arrays.asList(Bean.class));
-    private final Collection<String> beanSkipLifecycles = new LinkedHashSet<>(8);
     //BeanPostProcessor接口是为了将每个bean的处理阶段的处理, 抽象成接口, 让用户可以根据不同需求不同处理. 比如自动注入,AOP,定时任务,异步注解,servlet注入,错误页注册
     private final Collection<BeanPostProcessor> beanPostProcessors = new TreeSet<>(new OrderComparator(orderedAnnotations));
-    private final Map<String,BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>(64);
+    //需要跳过生命周期管理的bean名称集合
+    private final Collection<String> beanSkipLifecycles = new LinkedHashSet<>(8);
+    //存放Class与bean名称对应关系
     private final Map<Class,String[]> beanNameMap = new ConcurrentHashMap<>(64);
+    //存放别名与别名关系或别名与bean名称的关系
     private final Map<String, String> beanAliasMap = new ConcurrentHashMap<>(6);
+    //存放bean名称与bean描述的关系
+    private final Map<String,BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>(64);
+    //存放bean名称与单例对象的关系
     private final Map<String,Object> beanInstanceMap = new ConcurrentHashMap<>(64);
     private final Map<Class, AbstractBeanFactory> beanFactoryMap = new LinkedHashMap<>(8);
     private final AbstractBeanFactory defaultBeanFactory = new DefaultBeanFactory();
@@ -212,9 +217,9 @@ public class ApplicationX {
     }
 
     /**
-     * Determine the raw name, resolving aliases to canonical names.
-     * @param beanNameOrAlias the user-specified name
-     * @return the transformed name
+     * 确定原始名称，解析别名规范名称。
+     * @param beanNameOrAlias 用户指定的名称
+     * @return beanName
      */
     public String getBeanName(String beanNameOrAlias) {
         String canonicalName = beanNameOrAlias;
@@ -795,7 +800,7 @@ public class ApplicationX {
     }
 
     /**
-     * 参考 org.springframework.beans.factory.annotation.InjectedElement
+     * 参考 org.springframework.beans.factory.annotation.InjectionMetadata.InjectedElement
      * @param <T> 成员
      */
     public static class InjectElement<T extends Member>{
@@ -816,6 +821,9 @@ public class ApplicationX {
          * 注入类型如下 {@link BeanDefinition#AUTOWIRE_BY_NAME,BeanDefinition#AUTOWIRE_BY_TYPE}
          */
         private final int[] autowireType;
+        /**
+         * 这个参数是否是必须的 (会覆盖这些参数是否是必须的)
+         */
         private final Boolean[] requireds;
         /**
          * 这个包含泛型注入的类型
@@ -825,7 +833,13 @@ public class ApplicationX {
          * 这个如果是泛型注入,则Class会是Object, 所以需要requiredType
          */
         private Class[] requiredClass;
+        /**
+         * 如果根据名称注入
+         */
         private String[] requiredName;
+        /**
+         * 这些参数是否是必须的
+         */
         private Boolean required;
 
         public InjectElement(Executable executable, ApplicationX applicationX){
@@ -906,6 +920,7 @@ public class ApplicationX {
             List<InjectElement<Field>> list = new ArrayList<>();
             for(Class clazz = rootClass; clazz != null && clazz!=Object.class; clazz = clazz.getSuperclass()) {
                 for (Field field : clazz.getDeclaredFields()) {
+                    //寻找打着注解的字段
                     if(null != findDeclaredAnnotation(field, applicationX.autowiredAnnotations, AUTOWIRED_ANNOTATION_CACHE_MAP)){
                         InjectElement<Field> element = new InjectElement<>(field, applicationX);
                         list.add(element);
@@ -919,6 +934,7 @@ public class ApplicationX {
             List<InjectElement<Method>> result = new ArrayList<>();
             eachClass(rootClass, clazz -> {
                 for (Method method : getDeclaredMethods(clazz)) {
+                    //寻找打着注解的方法
                     if(null != findDeclaredAnnotation(method, applicationX.autowiredAnnotations, AUTOWIRED_ANNOTATION_CACHE_MAP)){
                         result.add(new InjectElement<>(method, applicationX));
                     }
@@ -927,6 +943,12 @@ public class ApplicationX {
             return result;
         }
 
+        /**
+         * 会根据参数类型取调用getBean()方法, 返回需要的所有参数
+         * @param targetClass 目标类
+         * @return 从容器中取出的多个bean
+         * @throws IllegalStateException 如果容器中不存在需要的bean
+         */
         private Object[] getInjectValues(Class targetClass) throws IllegalStateException{
             Boolean defaultRequired = this.required;
             if(defaultRequired == null){
@@ -1010,10 +1032,12 @@ public class ApplicationX {
                 if (Modifier.isFinal(field.getModifiers())) {
                     return null;
                 }
+                //获取注入的参数
                 Object[] values = getInjectValues(targetClass);
                 try {
                     boolean accessible = field.isAccessible();
                     try {
+                        //调用java的字段赋值, 相当于this.field = value
                         field.setAccessible(true);
                         field.set(target, values[0]);
                     } finally {
@@ -1028,6 +1052,7 @@ public class ApplicationX {
                 try {
                     boolean accessible = method.isAccessible();
                     try {
+                        //调用java的字段赋值, 相当于setValue(values)
                         method.setAccessible(true);
                         return method.invoke(target, values);
                     } finally {
@@ -1043,6 +1068,7 @@ public class ApplicationX {
         }
 
         public Object newInstance(Object[] args) throws IllegalStateException{
+            //不能创建枚举类
             if (this.member.getDeclaringClass().isEnum()){
                 return null;
             }
@@ -1050,11 +1076,14 @@ public class ApplicationX {
                 throw new IllegalStateException("member not instanceof Constructor!");
             }
             Constructor constructor = (Constructor) this.member;
-            if(args == null|| constructor.getParameterCount() != args.length) {
+            //如果用户在getBean(name,args)没有传参数
+            if(args == null|| args.length == 0) {
+                //获取注入的参数
                 args = getInjectValues(member.getDeclaringClass());
             }
             boolean accessible = constructor.isAccessible();
             try {
+                //相当于 new MyBean(args)
                 constructor.setAccessible(true);
                 Object instance = constructor.newInstance(args);
                 return instance;
@@ -1853,6 +1882,9 @@ public class ApplicationX {
         }
     }
 
+    /**
+     * 参考 org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor
+     */
     @Order(Integer.MIN_VALUE + 20)
     public static class AutowiredConstructorPostProcessor implements SmartInstantiationAwareBeanPostProcessor,MergedBeanDefinitionPostProcessor{
         private static final Constructor[] EMPTY = {};
@@ -1868,6 +1900,7 @@ public class ApplicationX {
         public void postProcessMergedBeanDefinition(BeanDefinition definition, Class<?> beanType, String beanName) {
             eachClass(beanType, clazz -> {
                 for (Method method : getDeclaredMethods(clazz)) {
+                    //寻找工厂bean, 例: 打着@Bean注解的. 也就是spring中的合成bean
                     Annotation factoryMethodAnnotation = findDeclaredAnnotation(method, applicationX.factoryMethodAnnotations, FACTORY_METHOD_ANNOTATION_CACHE_MAP);
                     if(factoryMethodAnnotation != null) {
                         addBeanDefinition(method,factoryMethodAnnotation,beanName,beanType);
@@ -1878,6 +1911,7 @@ public class ApplicationX {
 
         @Override
         public Constructor<?>[] determineCandidateConstructors(Class<?> beanClass, String beanName) throws RuntimeException {
+            //这里负责选出多个候选的构造器, 如果需要用无参构造,则需要返回null.
             List<Constructor<?>> list = new LinkedList<>();
             Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
             for (Constructor<?> constructor : constructors) {
@@ -1904,6 +1938,7 @@ public class ApplicationX {
         @Override
         public boolean postProcessAfterInstantiation(Object bean, String beanName) throws RuntimeException {
             BeanDefinition definition = applicationX.getBeanDefinition(beanName);
+            //获取用户定义的类型
             Class beanClass = definition.getBeanClassIfResolve(applicationX.getResourceLoader());
             if(isAbstract(beanClass)){
                 beanClass = bean.getClass();
@@ -1912,8 +1947,16 @@ public class ApplicationX {
             return true;
         }
 
+        /**
+         * 调用setter方法, 与字段赋值. 例如: this.myData = myData
+         * 现在正处在bean刚实例化完的时候, 相当于刚new Bean()完的事件通知中.这时还是刚创建的bean, 很干净.要给它注入对象
+         * @param bean 刚创建的bean
+         * @param beanClass 不是抽象的类型
+         */
         private void inject(Object bean,Class beanClass){
+            //获取需要注入的字段, 比如打过注解(@Autowired)的字段
             List<InjectElement<Field>> declaredFields = InjectElement.getInjectFields(beanClass,applicationX);
+            //获取需要注入的方法. 比如打过注解(@Autowired)的setter方法.
             List<InjectElement<Method>> declaredMethods = InjectElement.getInjectMethods(beanClass,applicationX);
             for (InjectElement<Field> element : declaredFields) {
                 if(element.required == null){
