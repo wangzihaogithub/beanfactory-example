@@ -944,8 +944,8 @@ public class ApplicationX {
         }
 
         /**
-         * 会根据参数类型取调用getBean()方法, 返回需要的所有参数
-         * @param targetClass 目标类
+         * 会根据类型或名称调用getBean()方法, 返回需要的所有参数. {@link BeanDefinition#AUTOWIRE_BY_TYPE,BeanDefinition#AUTOWIRE_BY_NAME}
+         * @param targetClass 注入目标类
          * @return 从容器中取出的多个bean
          * @throws IllegalStateException 如果容器中不存在需要的bean
          */
