@@ -157,6 +157,11 @@ public class ApplicationX {
         return oldInstance;
     }
 
+    /**
+     * 注册别名
+     * @param name bean名称
+     * @param alias 别名
+     */
     public void registerAlias(String name, String alias) {
         Objects.requireNonNull(name, "'name' must not be empty");
         Objects.requireNonNull(alias, "'alias' must not be empty");
@@ -640,16 +645,6 @@ public class ApplicationX {
         return existAnnotation;
     }
 
-//    private static Unsafe UNSAFE;
-//    static {
-//        try {
-//            Field f = Unsafe.class.getDeclaredField("theUnsafe");
-//            f.setAccessible(true);
-//            UNSAFE =(Unsafe)f.get(null);
-//        } catch (Exception e) {
-//            //
-//        }
-//    }
     @Override
     public String toString() {
         return scanner.getRootPackages() +" @ size = " + beanDefinitionMap.size();
@@ -804,12 +799,30 @@ public class ApplicationX {
      */
     public static class InjectElement<T extends Member>{
         private static final String[] QUALIFIER_FIELDS = new String[]{"value","name"};
+        /**
+         * 成员有[构造器,方法,字段] {@link Constructor,Method,Field}
+         */
         private final T member;
+        /**
+         * 用于获取注入参数
+         */
         private final ApplicationX applicationX;
+        /**
+         * 自动注入标记的注解
+         */
         private final Annotation autowiredAnnotation;
+        /**
+         * 注入类型如下 {@link BeanDefinition#AUTOWIRE_BY_NAME,BeanDefinition#AUTOWIRE_BY_TYPE}
+         */
         private final int[] autowireType;
         private final Boolean[] requireds;
+        /**
+         * 这个包含泛型注入的类型
+         */
         private Type[] requiredType;
+        /**
+         * 这个如果是泛型注入,则Class会是Object, 所以需要requiredType
+         */
         private Class[] requiredClass;
         private String[] requiredName;
         private Boolean required;
@@ -980,6 +993,13 @@ public class ApplicationX {
             return result == null? parameterGenericClass : result;
         }
 
+        /**
+         * 注入
+         * @param target 需要注入的实例
+         * @param targetClass 需要注入的原始类型,用于查找泛型
+         * @return 如果是方法,则返回方法返回值. 如果是构造器,返回实例. 如果是字段返回null
+         * @throws IllegalStateException
+         */
         public Object inject(Object target,Class targetClass) throws IllegalStateException{
             if(targetClass == null){
                 targetClass = target.getClass();
@@ -1089,13 +1109,13 @@ public class ApplicationX {
     }
 
     private class DefaultBeanFactory implements AbstractBeanFactory {
-        /** Cache of filtered PropertyDescriptors: bean Class to PropertyDescriptor array. */
+        /** 缓存检查环依赖的属性 */
         private final Map<Class<?>, PropertyDescriptor[]> filteredPropertyDescriptorsCache = new ConcurrentHashMap<>();
         //如果构造参数注入缺少参数, 是否抛出异常
         private boolean defaultInjectRequiredConstructor = true;
         @Override
         public Object createBean(String beanName,BeanDefinition definition,Object[] args) {
-            // Give BeanPostProcessors a chance to return a proxy instead of the target bean instance.
+            //如果不等于空, 说明在事件通知时, 用户返回了实例,不需要创建. 这样会不受下面的生命周期控制 (通常用于代理)
             Object bean = resolveBeforeInstantiation(beanName, definition);
             if (bean != null) {
                 return bean;
@@ -1105,13 +1125,16 @@ public class ApplicationX {
         }
 
         protected Object doCreateBean(String beanName, BeanDefinition definition,Object[] args){
+            //创建实例, 等同于newInstance(); 这时只是一个空的实例.
             BeanWrapper beanInstanceWrapper = createBeanInstance(beanName, definition, args);
+            //最终暴露给用户的实例
             Object exposedObject = beanInstanceWrapper.getWrappedInstance();
             Class<?> beanType = beanInstanceWrapper.getWrappedClass();
-
+            //一个BeanDefinition只会通知一次合成bean事件
             synchronized (definition.postProcessingLock) {
                 if (!definition.postProcessed) {
                     try {
+                        //通知定义合并bean, 合成bean是一个bean里，会创建多个子孙bean. 例如@Bean注解的实现
                         applyMergedBeanDefinitionPostProcessors(definition, beanType, beanName);
                     }
                     catch (Throwable ex) {
@@ -1121,13 +1144,25 @@ public class ApplicationX {
                 }
             }
 
+            //如果需要生命周期管理 (这个方法在spring里没有,这里为了满足我的特殊需求用的, 我需要对某些bean强制跳过生命周期管理)
             if(isLifecycle(beanName)){
+                //填充bean属性, 也就是自动注入.与PostProcessor事件
                 populateBean(beanName,definition,beanInstanceWrapper);
+                //执行我们自己定义的初始化方法, 与执行bean的生命周期方法与PostProcessor事件,
+                //例如: Aware接口, @PostConstruct,InitializingBean.afterPropertiesSet();
                 exposedObject = initializeBean(beanName, beanInstanceWrapper, definition);
             }
             return exposedObject;
         }
 
+        /**
+         * 通知合成bean的配置
+         * @param mbd 在spring里是MultiBeanDefinition的意思(多个BeanDefinition),
+         *            spring的BeanDefinition里有个parent字段.
+         *            我这里简化了实现, 只有一个.
+         * @param beanType  bean的原始类型(可能层层包装后,类型在不断的变化)
+         * @param beanName bean的名称
+         */
         protected void applyMergedBeanDefinitionPostProcessors(BeanDefinition mbd, Class<?> beanType, String beanName) {
             for (BeanPostProcessor bp : new ArrayList<>(beanPostProcessors)) {
                 if (bp instanceof MergedBeanDefinitionPostProcessor) {
@@ -1143,8 +1178,11 @@ public class ApplicationX {
                 // Make sure bean class is actually resolved at this point.
                 Class<?> targetType = resolveBeanClass(beanName, mbd,resourceLoader);
                 if (targetType != null) {
+                    //通知实例化前的PostProcessor事件
                     bean = applyBeanPostProcessorsBeforeInstantiation(targetType, beanName);
+                    //如果事件后, 把实例返回了,则直接退出后续的所有生命周期逻辑(通常用于代理对象)
                     if (bean != null) {
+                        //通知实例化后前的PostProcessor事件
                         bean = applyBeanPostProcessorsAfterInitialization(bean, beanName);
                     }
                 }
@@ -1169,13 +1207,22 @@ public class ApplicationX {
             return definition.getBeanClassIfResolve(loaderSupplier);
         }
 
+        /**
+         * 创建bean实例, 分为无参创建或有参构造方法创建.
+         * @param beanName bean名称
+         * @param definition bean的定义描述
+         * @param args 预期的构造入参,可能会改变
+         * @return bean的实例包装
+         */
         protected BeanWrapper createBeanInstance(String beanName,BeanDefinition definition,Object[] args){
             Supplier<?> beanSupplier = definition.getBeanSupplier();
             Object beanInstance;
+            //如果用户定义了实例的获取, 就使用户返回的.
             if(beanSupplier != null){
                 beanInstance = beanSupplier.get();
             }else {
                 Class<?> beanClass = resolveBeanClass(beanName,definition,resourceLoader);
+                //选出候选的构造方法,并排列好顺序, 如果需要用无参构造方法,则需要返回null.
                 Constructor<?>[] ctors = determineConstructorsFromBeanPostProcessors(beanClass, beanName);
                 if (ctors != null
                         || definition.getAutowireMode() == BeanDefinition.AUTOWIRE_CONSTRUCTOR
@@ -1183,8 +1230,10 @@ public class ApplicationX {
                         || (args != null && args.length > 0)) {
                     return autowireConstructor(beanName, definition, ctors, args);
                 }
+                //用无参构造创建实例
                 beanInstance = newInstance(beanClass);
             }
+            //创建包装bean, 包装bean可以方便的操作与配置bean的getter与setter,与参数类型转换.减少重复寻找class属性操作.
             BeanWrapper bw = new BeanWrapper(beanInstance);
             initBeanWrapper(bw);
             return bw;
@@ -1224,17 +1273,26 @@ public class ApplicationX {
             return null;
         }
 
+        /**
+         * 初始化包装bean
+         * @param bw 包装bean
+         */
         protected void initBeanWrapper(BeanWrapper bw) {
+            //自动注入需要的类型转换服务
             bw.conversionService = new ConversionService(){};
+            //注册用户特殊的参数处理逻辑, 比如将原始数据是字符串'A,B,C',你可以注册一个字符串转数组的逻辑[A,B,C]
 //            registerCustomEditors(bw);
             //实现需参照 org.springframework.beans.factory.support.AbstractBeanFactory.registerCustomEditors
         }
 
         protected void populateBean(String beanName,BeanDefinition definition,BeanWrapper bw){
+            //boolean控制是否需要继续填充bean的属性
             boolean continueWithPropertyPopulation = true;
+            //通知实例化后的PostProcessor事件
             for (BeanPostProcessor bp : new ArrayList<>(beanPostProcessors)) {
                 if(bp instanceof InstantiationAwareBeanPostProcessor){
                     InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+                    //注: 我这个写的自动注入是在这里实现的,与spring注入的时机不一样. 按照spring的写法代码量太大了.
                     if (!ibp.postProcessAfterInstantiation(bw.getWrappedInstance(), beanName)) {
                         continueWithPropertyPopulation = false;
                         break;
@@ -1244,7 +1302,10 @@ public class ApplicationX {
             if (!continueWithPropertyPopulation) {
                 return;
             }
+
+            //这里如果用户没有配置BeanDefinition,默认取出来的length是0
             PropertyValues pvs = definition.getPropertyValues();
+            //如果用户在BeanDefinition中自己声明了自动注入,先把用户声明的注入进去
             if(definition.getAutowireMode() == BeanDefinition.AUTOWIRE_BY_NAME
                     || definition.getAutowireMode() == BeanDefinition.AUTOWIRE_BY_TYPE) {
                 PropertyValues newPvs = new PropertyValues(pvs.getPropertyValues());
@@ -1259,9 +1320,13 @@ public class ApplicationX {
 
             boolean needsDepCheck = definition.getDependencyCheck() != BeanDefinition.DEPENDENCY_CHECK_NONE;
             PropertyDescriptor[] filteredPds = null;
+            //spring的自动注入是在这里的BeanPostProcessor和applyPropertyValues()方法实现的
+            //注: 我自动注入没在这里实现,因为代码量太大了. 但和spring注入的处理逻辑是一致的,就是时机不一样,spring是分多批次注入,我是一次性注入
             for (BeanPostProcessor bp : new ArrayList<>(beanPostProcessors)) {
+                //这里用户可以增加自己的自动注入属性, 用户返回PropertyValues即可.
                 if (bp instanceof InstantiationAwareBeanPostProcessor) {
                     InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+                    //如果用户返回的PropertyValues是null, 让用户消费掉之前的PropertyValues
                     PropertyValues pvsToUse = ibp.postProcessProperties(pvs, bw.getWrappedInstance(), beanName);
                     if (pvsToUse == null) {
                         if (filteredPds == null) {
@@ -1275,14 +1340,18 @@ public class ApplicationX {
                     pvs = pvsToUse;
                 }
             }
+            //如果需要检查循环依赖
             if (needsDepCheck) {
                 if (filteredPds == null) {
+                    //过滤掉一些不检查循环依赖的属性
                     filteredPds = filterPropertyDescriptorsForDependencyCheck(bw, definition.allowCaching);
                 }
+                //检查循环依赖
                 checkDependencies(beanName, definition, filteredPds, pvs);
             }
 
             if (pvs != null) {
+                //这里为了处理InstantiationAwareBeanPostProcessor的返回结果pvs.没人实现的话pvs.length应该是0
                 applyPropertyValues(beanName, definition, bw, pvs);
             }
         }
@@ -1343,13 +1412,9 @@ public class ApplicationX {
                 throw new IllegalStateException("newInstanceByJdk error="+e,e);
             }
         }
-
         private void autowireByType(String beanName,BeanDefinition definition,BeanWrapper beanInstanceWrapper,PropertyValues pvs){
-
         }
-
         private void autowireByName(String beanName,BeanDefinition definition,BeanWrapper beanInstanceWrapper,PropertyValues pvs){
-
         }
     }
 
@@ -1377,13 +1442,6 @@ public class ApplicationX {
         }
     }
 
-    /**
-     * 寻找注解
-     * @param element AnnotatedElement
-     * @param finds finds annotationList
-     * @param cacheMap cacheMap
-     * @return Annotation
-     */
     private static Annotation findDeclaredAnnotation(AnnotatedElement element, Collection<Class<? extends Annotation>> finds, Map<Class,Boolean> cacheMap){
         Annotation[] fieldAnnotations = element.getDeclaredAnnotations();
         for (Annotation annotation : fieldAnnotations) {
@@ -1685,7 +1743,6 @@ public class ApplicationX {
          * Set (or change) the object that is to be edited.  Primitive types such
          * as "int" must be wrapped as the corresponding object type such as
          * "java.lang.Integer".
-         *
          * @param value The new target object to be edited.  Note that this
          *              object should not be modified by the PropertyEditor, rather
          *              the PropertyEditor should create a new object to hold any
@@ -1695,7 +1752,6 @@ public class ApplicationX {
 
         /**
          * Gets the property value.
-         *
          * @return The value of the property.  Primitive types such as "int" will
          * be wrapped as the corresponding object type such as "java.lang.Integer".
          */
@@ -1824,9 +1880,11 @@ public class ApplicationX {
             List<Constructor<?>> list = new LinkedList<>();
             Constructor<?>[] constructors = beanClass.getDeclaredConstructors();
             for (Constructor<?> constructor : constructors) {
+                //如果是合成构造器 (合成构造器是由编译器生成的构造,比如无参构造器)
                 if(constructor.isSynthetic()){
                     return null;
                 }
+                //如果是无参构造器
                 if(constructor.getParameterCount() == 0 && Modifier.isPublic(constructor.getModifiers())){
                     return null;
                 }
@@ -1882,7 +1940,6 @@ public class ApplicationX {
                 Object bean = element.applicationX.getBean(factoryBeanName);
                 return element.inject(bean,factoryBeanClass);
             });
-
             applicationX.addBeanDefinition(beanName,definition);
             for (String alias : beanNameList) {
                 applicationX.registerAlias(beanName, alias);
@@ -2170,7 +2227,7 @@ public class ApplicationX {
             String beanName = entry.getKey();
             BeanDefinition definition = entry.getValue();
             try {
-                if(containsInstance(beanName)){
+                if(containsInstance(beanName) && isLifecycle(beanName)){
                     Object bean = getBean(beanName, null, false);
                     if(bean == null){
                         continue;
