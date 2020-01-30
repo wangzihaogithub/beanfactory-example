@@ -29,7 +29,7 @@ import static java.lang.annotation.ElementType.*;
  *  2016/11/11/011
  */
 public class ApplicationX {
-    private static final AtomicInteger SHUTDOWN_HOOKID_INCR = new AtomicInteger();
+    private static final AtomicInteger SHUTDOWN_HOOK_ID_INCR = new AtomicInteger();
     private static final Method[] EMPTY_METHOD_ARRAY = {};
     private static final PropertyDescriptor[] EMPTY_DESCRIPTOR_ARRAY = {};
     private static final Constructor<ConcurrentMap> CONCURRENT_REFERENCE_MAP_CONSTRUCTOR = getAnyConstructor(
@@ -63,6 +63,7 @@ public class ApplicationX {
     private final Collection<Class<? extends Annotation>> factoryMethodAnnotations = new LinkedHashSet<>(
                 Arrays.asList(Bean.class));
     private final Collection<String> beanSkipLifecycles = new LinkedHashSet<>(8);
+    //BeanPostProcessor接口是为了将每个bean的处理阶段的处理, 抽象成接口, 让用户可以根据不同需求不同处理. 比如自动注入,AOP,定时任务,异步注解,servlet注入,错误页注册
     private final Collection<BeanPostProcessor> beanPostProcessors = new TreeSet<>(new OrderComparator(orderedAnnotations));
     private final Map<String,BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>(64);
     private final Map<Class,String[]> beanNameMap = new ConcurrentHashMap<>(64);
@@ -97,7 +98,7 @@ public class ApplicationX {
         addInstance(this);
         addBeanPostProcessor(new RegisteredBeanPostProcessor(this));
         addBeanPostProcessor(new AutowiredConstructorPostProcessor(this));
-        Runtime.getRuntime().addShutdownHook(new Thread(this::shutdownHook,"app.shutdownHook-"+SHUTDOWN_HOOKID_INCR.getAndIncrement()));
+        Runtime.getRuntime().addShutdownHook(new Thread(this::shutdownHook,"app.shutdownHook-"+ SHUTDOWN_HOOK_ID_INCR.getAndIncrement()));
     }
 
     public static void main(String[] args) throws Exception {
