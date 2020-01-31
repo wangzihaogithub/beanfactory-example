@@ -22,7 +22,7 @@
 
 * 由用户手工添加BeanDefinition, 或文件扫描自动添加BeanDefinition
 
-* newInstance(new 操作)
+* **newInstance阶段**(new 操作)
 
     newInstance之前的回调接口. postProcessBeforeInstantiation(beanName, BeanDefinition) 
     
@@ -34,7 +34,7 @@
     
     newInstance之后的回调接口. postProcessAfterInstantiation(bean,beanName)
     
-* 填充bean属性阶段(自动注入).  
+* **填充bean属性阶段**(自动注入) 
 
   获取填充属性的的回调接口. postProcessProperties(PropertyValues,bean,beanName)
   
@@ -42,7 +42,7 @@
   
   这时发生了填充属性数据,bean里面的属性被填充完毕.
   
-* 初始化bean阶段.
+* **初始化bean阶段**
   
   先将所有实现注入接口执行一遍 (Aware接口)
   
@@ -52,9 +52,9 @@
   
   初始化后的回调接口. postProcessAfterInitialization(bean,beanName)
 
-* 如果是单例,则将bean保存到单例map中.
+* **如果是单例,则将bean保存到单例map中**
 
-* 结束流程
+* **结束流程**
 
  ---
 
