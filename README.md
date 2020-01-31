@@ -20,7 +20,7 @@
 
 ### 介绍Bean创建流程 (与spring一致)
 
-* 由用户手工添加BeanDefinition, 或文件扫描自动添加BeanDefinition
+* **首先需要添加BeanDefinition** (可以用户主动添加 或扫描文件自动添加)
 
 * **newInstance阶段**(new 操作)
 
