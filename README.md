@@ -24,33 +24,33 @@
 
 * **newInstance阶段**(new 操作)
 
-    newInstance之前的回调接口. postProcessBeforeInstantiation(beanName, BeanDefinition) 
+    1.newInstance之前的回调接口. postProcessBeforeInstantiation(beanName, BeanDefinition) 
     
-    选择可用构造器的回调接口. determineCandidateConstructors(beanClass,beanName)
+    2.选择可用构造器的回调接口. determineCandidateConstructors(beanClass,beanName)
         
-    发生了newInstance调用,获得了实例
+    3.发生了newInstance调用,获得了实例
     
-    通知合成bean配置的回调接口. postProcessMergedBeanDefinition(bean,beanName). 注: 合成bean是一个bean里，会创建多个子孙bean. 例如@Bean注解的实现
+    4.通知合成bean配置的回调接口. postProcessMergedBeanDefinition(bean,beanName). 注: 合成bean是一个bean里，会创建多个子孙bean. 例如@Bean注解的实现
     
-    newInstance之后的回调接口. postProcessAfterInstantiation(bean,beanName)
+    5.newInstance之后的回调接口. postProcessAfterInstantiation(bean,beanName)
     
 * **填充bean属性阶段**(自动注入) 
 
-  获取填充属性的的回调接口. postProcessProperties(PropertyValues,bean,beanName)
+  1.获取填充属性的的回调接口. postProcessProperties(PropertyValues,bean,beanName)
   
-  获取填充数据的的回调接口. postProcessPropertyValues(PropertyValues,PropertyDescriptor[],bean,beanName)
+  2.获取填充数据的的回调接口. postProcessPropertyValues(PropertyValues,PropertyDescriptor[],bean,beanName)
   
-  这时发生了填充属性数据,bean里面的属性被填充完毕.
+  3.这时发生了填充属性数据,bean里面的属性被填充完毕.
   
 * **初始化bean阶段**
   
-  先将所有实现注入接口执行一遍 (Aware接口)
+  1.先将所有实现注入接口执行一遍 (Aware接口)
   
-  初始化前的回调接口. postProcessBeforeInitialization(bean,beanName)
+  2.初始化前的回调接口. postProcessBeforeInitialization(bean,beanName)
   
-  这时发生了初始化方法的调用 (InitializingBean接口与@PostConstruct方法)
+  3.这时发生了初始化方法的调用 (InitializingBean接口与@PostConstruct方法)
   
-  初始化后的回调接口. postProcessAfterInitialization(bean,beanName)
+  4.初始化后的回调接口. postProcessAfterInitialization(bean,beanName)
 
 * **如果是单例,则将bean保存到单例map中**
 
