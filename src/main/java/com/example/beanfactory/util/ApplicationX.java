@@ -11,6 +11,8 @@ import java.lang.annotation.*;
 import java.lang.reflect.*;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLClassLoader;
+import java.net.URLDecoder;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -44,7 +46,9 @@ public class ApplicationX {
     private static final Map<Class,Boolean> FACTORY_METHOD_ANNOTATION_CACHE_MAP = newConcurrentReferenceMap(32);
     private static final Map<Class,PropertyDescriptor[]> PROPERTY_DESCRIPTOR_CACHE_MAP = newConcurrentReferenceMap(128);
     private static final Map<Class,Method[]> DECLARED_METHODS_CACHE_MAP = newConcurrentReferenceMap(128);
+    private static final OrderComparator COMPARATOR = new OrderComparator(new LinkedHashSet<>(Collections.singletonList(Order.class)));
 
+    private BiPredicate<ClassLoader,URL> resourceLoaderUrlFilter = (classLoader, url) -> !isJavaLib(url);
     private Supplier<ClassLoader> resourceLoader;
     private Function<BeanDefinition,String> beanNameGenerator = new DefaultBeanNameGenerator(this);
 
@@ -73,10 +77,13 @@ public class ApplicationX {
     //存放bean名称与bean描述的关系
     private final Map<String,BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>(64);
     //存放bean名称与单例对象的关系
-    private final Map<String,Object> beanInstanceMap = new ConcurrentHashMap<>(64);
+    private final Map<String,Object> singletonObjects = new ConcurrentHashMap<>(64);
+    //正在创建的单例bean
+    private final Set<String> singletonsCurrentlyInCreation = Collections.newSetFromMap(new ConcurrentHashMap<>(16));
     private final Map<Class, AbstractBeanFactory> beanFactoryMap = new LinkedHashMap<>(8);
     private final AbstractBeanFactory defaultBeanFactory = new DefaultBeanFactory();
     private final Scanner scanner = new Scanner();
+    private final long timestamp = System.currentTimeMillis();
 
     public ApplicationX() {
         this(ApplicationX.class::getClassLoader);
@@ -100,7 +107,7 @@ public class ApplicationX {
                 "org.springframework.beans.factory.annotation.Qualifier");
         addClasses(orderedAnnotations,
                 "org.springframework.core.annotation.Order");
-        addInstance(this);
+        addSingletonBeanDefinition(this);
         addBeanPostProcessor(new RegisteredBeanPostProcessor(this));
         addBeanPostProcessor(new AutowiredConstructorPostProcessor(this));
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdownHook,"app.shutdownHook-"+ SHUTDOWN_HOOK_ID_INCR.getAndIncrement()));
@@ -119,6 +126,10 @@ public class ApplicationX {
         System.out.println("app = " + app);
     }
 
+    public long getTimestamp() {
+        return timestamp;
+    }
+
     private void addClasses(Collection annotationList, String... classNames){
         ClassLoader classLoader = resourceLoader.get();
         for (String className : classNames) {
@@ -130,19 +141,19 @@ public class ApplicationX {
         }
     }
 
-    public Object addInstance(Object instance){
-        return addInstance(instance,null,true,null);
+    public Object addSingletonBeanDefinition(Object instance){
+        return addSingletonBeanDefinition(instance,null,true,null);
     }
 
-    public Object addInstance(Object instance,String beanName){
-        return addInstance(instance,beanName,true,null);
+    public Object addSingletonBeanDefinition(Object instance, String beanName){
+        return addSingletonBeanDefinition(instance,beanName,true,null);
     }
 
-    public Object addInstance(Object instance,String beanName,boolean isLifecycle){
-        return addInstance(instance,beanName,isLifecycle,null);
+    public Object addSingletonBeanDefinition(Object instance, String beanName, boolean isLifecycle){
+        return addSingletonBeanDefinition(instance,beanName,isLifecycle,null);
     }
 
-    public Object addInstance(Object instance, String beanName, boolean isLifecycle, BiConsumer<String,BeanDefinition> beanDefinitionConfig){
+    public Object addSingletonBeanDefinition(Object instance, String beanName, boolean isLifecycle, BiConsumer<String,BeanDefinition> beanDefinitionConfig){
         Class beanType = instance.getClass();
         BeanDefinition definition = newBeanDefinition(beanType);
         definition.setBeanSupplier(()->instance);
@@ -155,8 +166,9 @@ public class ApplicationX {
         if(beanDefinitionConfig != null) {
             beanDefinitionConfig.accept(beanName, definition);
         }
+        definition.setScope(BeanDefinition.SCOPE_SINGLETON);
         addBeanDefinition(beanName,definition);
-        Object oldInstance = beanInstanceMap.remove(beanName, instance);
+        Object oldInstance = singletonObjects.remove(beanName, instance);
         if(!definition.isLazyInit()) {
             getBean(beanName, null, true);
         }
@@ -216,6 +228,14 @@ public class ApplicationX {
         return this.beanAliasMap.containsKey(name);
     }
 
+    public boolean isSingletonCurrentlyInCreation(String beanName) {
+        return this.singletonsCurrentlyInCreation.contains(beanName);
+    }
+
+    protected void addSingletonBeanDefinition(String beanName, Object singletonObject) {
+        this.singletonObjects.put(beanName, singletonObject);
+    }
+
     /**
      * 确定原始名称，解析别名规范名称。
      * @param beanNameOrAlias 用户指定的名称
@@ -253,67 +273,211 @@ public class ApplicationX {
         }
     }
 
-    public ScannerResult scanner(ClassLoader classLoader){
-        ScannerResult result = new ScannerResult();
-        try {
-            for(String rootPackage : scanner.getRootPackages()){
-                scanner.doScan(rootPackage,classLoader,(className)->{
-                    try {
-                        Class clazz = Class.forName(className,false, classLoader);
-                        if (clazz.isAnnotation()) {
-                            return;
-                        }
-                        // TODO: 1月27日 027  doScan skip interface impl by BeanPostProcessor
-                        if(clazz.isInterface()){
-                            return;
-                        }
-                        if(!isExistAnnotation(clazz, scannerAnnotations, result.scannerAnnotationCacheMap)) {
-                            return;
-                        }
-                        BeanDefinition definition = newBeanDefinition(clazz);
-                        String beanName = beanNameGenerator.apply(definition);
-                        result.beanDefinitionMap.put(beanName,definition);
-                    } catch (ReflectiveOperationException | LinkageError e) {
-                        //skip
-                    }
-                });
+    protected BiConsumer<URL,String> newScannerConsumer(ClassLoader classLoader,ScannerResult result){
+        return (url,className)->{
+            try {
+                result.classCount.incrementAndGet();
+                Class clazz = Class.forName(className,false, classLoader);
+                if (clazz.isAnnotation()) {
+                    return;
+                }
+                // TODO: 1月27日 027  doScan skip interface impl by BeanPostProcessor
+                if(clazz.isInterface()){
+                    return;
+                }
+                if(!isExistAnnotation(clazz, scannerAnnotations, result.scannerAnnotationCacheMap)) {
+                    return;
+                }
+                BeanDefinition definition = newBeanDefinition(clazz);
+                String beanName = beanNameGenerator.apply(definition);
+                result.beanDefinitionMap.put(beanName,definition);
+            } catch (ReflectiveOperationException | LinkageError e) {
+                //skip
             }
-            return result;
-        } catch (Exception e) {
-            throw new IllegalStateException("scanner error="+e,e);
+        };
+    }
+
+    public ScannerResult scanner(ClassLoader classLoader,boolean onlyInMyProject){
+        return scanner(classLoader,onlyInMyProject,new ScannerResult());
+    }
+
+    public ScannerResult scanner(ClassLoader classLoader,boolean onlyInMyProject,ScannerResult result){
+        result.scannerBeginTimestamp = System.currentTimeMillis();
+        try {
+            ClassLoader systemClassLoader = ClassLoader.getSystemClassLoader();
+            //只在我的项目中搜索类
+            if (onlyInMyProject) {
+                result.classLoaders.add(classLoader);
+                BiConsumer<URL, String> consumer = newScannerConsumer(classLoader, result);
+                try {
+                    for (String rootPackage : scanner.getRootPackages()) {
+                        scanner.doScan(rootPackage, classLoader, consumer);
+                    }
+                } catch (IOException e) {
+                    throw new IllegalStateException("scanner classLoader=" + classLoader + ",error=" + e, e);
+                }
+                return result;
+            }
+
+            //获取用户自定义路径url
+            for (ClassLoader userLoader = classLoader; userLoader != null && userLoader != systemClassLoader; userLoader = userLoader.getParent()) {
+                if (!(userLoader instanceof URLClassLoader)) {
+                    continue;
+                }
+                URL[] urls = ((URLClassLoader) userLoader).getURLs();
+                if (urls == null) {
+                    continue;
+                }
+                for (URL url : urls) {
+                    result.addClassUrl(userLoader, url);
+                }
+            }
+
+            //扫描所有用户自定义加载器jar包路径
+            for (URL url : result.tempUrls) {
+                BiConsumer<URL, String> consumer = newScannerConsumer(classLoader, result);
+                try {
+                    for (String rootPackage : scanner.getRootPackages()) {
+                        scanner.doScan(rootPackage, null, url, consumer);
+                    }
+                } catch (IOException e) {
+                    throw new IllegalStateException("scanner userClassLoader error. url=" + url + ",error=" + e, e);
+                }
+            }
+            result.tempUrls.clear();
+
+            //扫描系统类加载器的jar包路径
+            String cp = System.getProperty("java.class.path");
+            if (cp != null) {
+                while (cp.length() > 0) {
+                    int pathSepIdx = cp.indexOf(File.pathSeparatorChar);
+                    String pathElem;
+                    if (pathSepIdx < 0) {
+                        pathElem = cp;
+                        addClassURL(result, systemClassLoader, pathElem);
+                        break;
+                    } else if (pathSepIdx > 0) {
+                        pathElem = cp.substring(0, pathSepIdx);
+                        addClassURL(result, systemClassLoader, pathElem);
+                    }
+                    cp = cp.substring(pathSepIdx + 1);
+                }
+                for (URL url : result.tempUrls) {
+                    BiConsumer<URL, String> consumer = newScannerConsumer(systemClassLoader, result);
+                    try {
+                        for (String rootPackage : scanner.getRootPackages()) {
+                            scanner.doScan(rootPackage, null, url, consumer);
+                        }
+                    } catch (IOException e) {
+                        throw new IllegalStateException("scanner systemClassLoader error. url=" + url + ",error=" + e, e);
+                    }
+                }
+                result.tempUrls.clear();
+            }
+        }finally {
+            result.scannerEndTimestamp = System.currentTimeMillis();
+        }
+        return result;
+    }
+
+    protected void addClassURL(ScannerResult result, ClassLoader loader, String path){
+        try {
+            URL url = new File(path).getCanonicalFile().toURI().toURL();
+            result.addClassUrl(loader,url);
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
+    public BiPredicate<ClassLoader, URL> getResourceLoaderUrlFilter() {
+        return resourceLoaderUrlFilter;
+    }
+
+    public void setResourceLoaderUrlFilter(BiPredicate<ClassLoader, URL> resourceLoaderUrlFilter) {
+        this.resourceLoaderUrlFilter = resourceLoaderUrlFilter;
+    }
+
+    protected boolean isJavaLib(URL url){
+        String urlStr = url.toString();
+        String[] javaPaths = {"/jre/lib/"};
+        for (String javaPath : javaPaths) {
+            if(urlStr.contains(javaPath)){
+                return true;
+            }
+        }
+        return false;
+    }
+
     public ScannerResult scanner(String... rootPackage){
+        return scanner(false,rootPackage);
+    }
+
+    public ScannerResult scanner(boolean onlyInMyProject,String... rootPackage){
         addScanPackage(rootPackage);
         ClassLoader loader = resourceLoader.get();
-        return scanner(loader);
+        return scanner(loader,onlyInMyProject);
     }
 
     public class ScannerResult{
+        public long scannerBeginTimestamp;
+        public long scannerEndTimestamp;
+        public long injectBeginTimestamp;
+        public long injectEndTimestamp;
+        private final AtomicInteger classCount = new AtomicInteger();
+        private final Set<ClassLoader> classLoaders = new LinkedHashSet<>();
+        private final Set<URL> tempUrls = new LinkedHashSet<>();
+        private final Set<URL> classUrls = new LinkedHashSet<>();
         private final Map<String,BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>(64);
         private final Map<Class,Boolean> scannerAnnotationCacheMap = new ConcurrentHashMap<>(64);
+        public AtomicInteger getClassCount() {
+            return classCount;
+        }
+        public Set<ClassLoader> getClassLoaders() {
+            return classLoaders;
+        }
+        public Set<URL> getClassUrls() {
+            return classUrls;
+        }
+        public Map<String, BeanDefinition> getBeanDefinitionMap() {
+            return beanDefinitionMap;
+        }
+        public Map<Class, Boolean> getScannerAnnotationCacheMap() {
+            return scannerAnnotationCacheMap;
+        }
+        public void addClassUrl(ClassLoader loader, URL url){
+            BiPredicate<ClassLoader, URL> filter = getResourceLoaderUrlFilter();
+            if(filter.test(loader,url)){
+                classLoaders.add(loader);
+                classUrls.add(url);
+                tempUrls.add(url);
+            }
+        }
         public int inject(){
-            LinkedList<String> beanNameList = new LinkedList<>();
-            for (Map.Entry<String,BeanDefinition> entry : beanDefinitionMap.entrySet()) {
-                String beanName = entry.getKey();
-                BeanDefinition definition = entry.getValue();
+            this.injectBeginTimestamp = System.currentTimeMillis();
+            try {
+                LinkedList<String> beanNameList = new LinkedList<>();
+                for (Map.Entry<String, BeanDefinition> entry : beanDefinitionMap.entrySet()) {
+                    String beanName = entry.getKey();
+                    BeanDefinition definition = entry.getValue();
 
-                addBeanDefinition(beanName,definition);
-                if (definition.isSingleton() && !definition.isLazyInit()) {
-                    if(BeanPostProcessor.class.isAssignableFrom(definition.getBeanClass())) {
-                        beanNameList.addFirst(beanName);
-                    }else {
-                        beanNameList.addLast(beanName);
+                    addBeanDefinition(beanName, definition);
+                    if (definition.isSingleton() && !definition.isLazyInit()) {
+                        if (BeanPostProcessor.class.isAssignableFrom(definition.getBeanClass())) {
+                            beanNameList.addFirst(beanName);
+                        } else {
+                            beanNameList.addLast(beanName);
+                        }
                     }
                 }
+                for (String beanName : beanNameList) {
+                    getBean(beanName, null, true);
+                }
+                beanDefinitionMap.clear();
+                scannerAnnotationCacheMap.clear();
+                return beanNameList.size();
+            }finally {
+                this.injectEndTimestamp = System.currentTimeMillis();
             }
-            for (String beanName : beanNameList) {
-                getBean(beanName, null, true);
-            }
-            beanDefinitionMap.clear();
-            scannerAnnotationCacheMap.clear();
-            return beanNameList.size();
         }
     }
 
@@ -344,7 +508,7 @@ public class ApplicationX {
     }
 
     public ApplicationX addBeanFactory(Class type, AbstractBeanFactory beanFactory){
-        addInstance(beanFactory);
+        addSingletonBeanDefinition(beanFactory);
         beanFactoryMap.put(type,beanFactory);
         return this;
     }
@@ -414,7 +578,7 @@ public class ApplicationX {
             }
         }
         return getBean(beanName,args,required);
-     }
+    }
 
     public <T>T getBean(String beanNameOrAlias,Object[] args,boolean required){
         String beanName = getBeanName(beanNameOrAlias);
@@ -426,14 +590,28 @@ public class ApplicationX {
                 return null;
             }
         }
-        Object instance = definition.isSingleton()? beanInstanceMap.get(beanName): null;
-        if(instance == null) {
-            Class beanClass = definition.getBeanClassIfResolve(resourceLoader);
-            AbstractBeanFactory beanFactory = getBeanFactory(beanClass);
-            instance = beanFactory.createBean(beanName,definition,args);
+
+        boolean isSingleton = definition.isSingleton();
+        Object instance = null;
+        if(isSingleton){
+            instance = singletonObjects.get(beanName);
         }
-        if(definition.isSingleton()){
-            beanInstanceMap.put(beanName, instance);
+        if(instance == null) {
+            if(isSingleton) {
+                beforeSingletonCreation(beanName);
+            }
+            try {
+                Class beanClass = definition.getBeanClassIfResolve(resourceLoader);
+                AbstractBeanFactory beanFactory = getBeanFactory(beanClass);
+                instance = beanFactory.createBean(beanName, definition, args);
+                if (isSingleton) {
+                    addSingletonBeanDefinition(beanName, instance);
+                }
+            }finally {
+                if (isSingleton) {
+                    afterSingletonCreation(beanName);
+                }
+            }
         }
         return (T) instance;
     }
@@ -476,12 +654,12 @@ public class ApplicationX {
 
     public boolean containsBean(String name) {
         String beanName = getBeanName(name);
-        return beanInstanceMap.containsKey(beanName) || beanDefinitionMap.containsKey(beanName);
+        return singletonObjects.containsKey(beanName) || beanDefinitionMap.containsKey(beanName);
     }
 
     public boolean containsInstance(String name) {
         String beanName = getBeanName(name);
-        return beanInstanceMap.containsKey(beanName);
+        return singletonObjects.containsKey(beanName);
     }
 
     public BeanDefinition newBeanDefinition(Class beanType){
@@ -518,6 +696,30 @@ public class ApplicationX {
 
         beanNameMap.put(beanClass,nameSet.toArray(new String[0]));
         return beanDefinitionMap.put(beanName,definition);
+    }
+
+    /**
+     * Callback after singleton creation.
+     * <p>The default implementation marks the singleton as not in creation anymore.
+     * @param beanName the name of the singleton that has been created
+     * @see #isSingletonCurrentlyInCreation
+     */
+    protected void afterSingletonCreation(String beanName) {
+        if (!this.singletonsCurrentlyInCreation.remove(beanName)) {
+            throw new IllegalStateException("Singleton '" + beanName + "' isn't currently in creation");
+        }
+    }
+
+    /**
+     * Callback before singleton creation.
+     * <p>The default implementation register the singleton as currently in creation.
+     * @param beanName the name of the singleton about to be created
+     * @see #isSingletonCurrentlyInCreation
+     */
+    protected void beforeSingletonCreation(String beanName) {
+        if (!this.singletonsCurrentlyInCreation.add(beanName)) {
+            throw new IllegalStateException("BeanCurrentlyInCreationException " + beanName);
+        }
     }
 
     protected int findAutowireType(AnnotatedElement field){
@@ -641,7 +843,7 @@ public class ApplicationX {
         return exist;
     }
 
-    private static boolean isExistAnnotation(Class clazz, Collection<Class<? extends Annotation>> finds,Map<Class,Boolean> cacheMap){
+    public static boolean isExistAnnotation(Class clazz, Collection<Class<? extends Annotation>> finds,Map<Class,Boolean> cacheMap){
         Boolean existAnnotation = cacheMap.get(clazz);
         if(existAnnotation == null){
             Map<Class,Boolean> tempCacheMap = new HashMap<>();
@@ -670,14 +872,42 @@ public class ApplicationX {
             return this.excludes;
         }
 
-        public void doScan(String basePackage,ClassLoader loader, Consumer<String> classConsumer) throws IOException {
+        public void doScan(String basePackage,String currentPackage, URL url, BiConsumer<URL,String> classConsumer) throws IOException {
+            StringBuilder buffer = new StringBuilder();
+            String splashPath = dotToSplash(basePackage);
+            if (url == null || existContains(url)) {
+                return;
+            }
+            String filePath = getRootPath(URLDecoder.decode(url.getFile(),"UTF-8"));
+            List<String> names;
+            if (isJarFile(filePath)) {
+                names = readFromJarFile(filePath, splashPath);
+            } else {
+                names = readFromDirectory(filePath);
+            }
+            for (String name : names) {
+                if (isClassFile(name)) {
+                    String className = toClassName(buffer, name, currentPackage);
+                    classConsumer.accept(url,className);
+                } else {
+                    String nextPackage;
+                    if(currentPackage == null || currentPackage.isEmpty()){
+                        nextPackage = name;
+                    }else {
+                        nextPackage = currentPackage + "." + name;
+                    }
+                    doScan(basePackage,nextPackage, new URL(url + "/" + name),classConsumer);
+                }
+            }
+        }
+        public void doScan(String basePackage,ClassLoader loader, BiConsumer<URL,String> classConsumer) throws IOException {
             StringBuilder buffer = new StringBuilder();
             String splashPath = dotToSplash(basePackage);
             URL url = loader.getResource(splashPath);
             if (url == null || existContains(url)) {
                 return;
             }
-            String filePath = getRootPath(url);
+            String filePath = getRootPath(url.getFile());
             List<String> names;
             if (isJarFile(filePath)) {
                 names = readFromJarFile(filePath, splashPath);
@@ -687,7 +917,7 @@ public class ApplicationX {
             for (String name : names) {
                 if (isClassFile(name)) {
                     String className = toClassName(buffer, name, basePackage);
-                    classConsumer.accept(className);
+                    classConsumer.accept(url,className);
                 } else {
                     doScan(basePackage + "." + name, loader,classConsumer);
                 }
@@ -729,7 +959,7 @@ public class ApplicationX {
             List<String> nameList = new ArrayList<>();
             while (null != entry) {
                 String name = entry.getName();
-                if (name.startsWith(splashedPackageName) && isClassFile(name)) {
+                if (!entry.isDirectory() && name.startsWith(splashedPackageName) && isClassFile(name)) {
                     nameList.add(name);
                 }
                 entry = jarIn.getNextJarEntry();
@@ -754,8 +984,7 @@ public class ApplicationX {
             return name.endsWith(".jar");
         }
 
-        private String getRootPath(URL url) {
-            String fileUrl = url.getFile();
+        private String getRootPath(String fileUrl) {
             int pos = fileUrl.indexOf('!');
             if (-1 == pos) {
                 return fileUrl;
@@ -1021,7 +1250,7 @@ public class ApplicationX {
          * @param target 需要注入的实例
          * @param targetClass 需要注入的原始类型,用于查找泛型
          * @return 如果是方法,则返回方法返回值. 如果是构造器,返回实例. 如果是字段返回null
-         * @throws IllegalStateException
+         * @throws IllegalStateException 注入异常
          */
         public Object inject(Object target,Class targetClass) throws IllegalStateException{
             if(targetClass == null){
@@ -1143,6 +1372,8 @@ public class ApplicationX {
         private final Map<Class<?>, PropertyDescriptor[]> filteredPropertyDescriptorsCache = new ConcurrentHashMap<>();
         //如果构造参数注入缺少参数, 是否抛出异常
         private boolean defaultInjectRequiredConstructor = true;
+        //是否允许循环引用
+        private boolean allowCircularReferences = true;
         @Override
         public Object createBean(String beanName,BeanDefinition definition,Object[] args) {
             //如果不等于空, 说明在事件通知时, 用户返回了实例,不需要创建. 这样会不受下面的生命周期控制 (通常用于代理)
@@ -1155,16 +1386,23 @@ public class ApplicationX {
         }
 
         protected Object doCreateBean(String beanName, BeanDefinition definition,Object[] args){
+            //参考 org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory
             //创建实例, 等同于newInstance(); 这时只是一个空的实例.
             BeanWrapper beanInstanceWrapper = createBeanInstance(beanName, definition, args);
             //最终暴露给用户的实例
             Object exposedObject = beanInstanceWrapper.getWrappedInstance();
+
+            //如果不需要生命周期管理 (这个方法在spring里没有,这里为了满足我的特殊需求用的, 我需要对某些bean强制跳过生命周期管理)
+            if(!isLifecycle(beanName)){
+                return exposedObject;
+            }
+
             Class<?> beanType = beanInstanceWrapper.getWrappedClass();
             //一个BeanDefinition只会通知一次合成bean事件
             synchronized (definition.postProcessingLock) {
                 if (!definition.postProcessed) {
                     try {
-                        //通知定义合并bean, 合成bean是一个bean里，会创建多个子孙bean. 例如@Bean注解的实现
+                        //通知定义合并bean, 合成bean是一个bean里，会创建多个子孙bean. 例如@Bean与@Autowired注解的收集
                         applyMergedBeanDefinitionPostProcessors(definition, beanType, beanName);
                     }
                     catch (Throwable ex) {
@@ -1174,14 +1412,22 @@ public class ApplicationX {
                 }
             }
 
-            //如果需要生命周期管理 (这个方法在spring里没有,这里为了满足我的特殊需求用的, 我需要对某些bean强制跳过生命周期管理)
-            if(isLifecycle(beanName)){
-                //填充bean属性, 也就是自动注入.与PostProcessor事件
-                populateBean(beanName,definition,beanInstanceWrapper);
-                //执行我们自己定义的初始化方法, 与执行bean的生命周期方法与PostProcessor事件,
-                //例如: Aware接口, @PostConstruct,InitializingBean.afterPropertiesSet();
-                exposedObject = initializeBean(beanName, beanInstanceWrapper, definition);
+            // 解决循环依赖
+            // Eagerly cache singletons to be able to resolve circular references
+            // even when triggered by lifecycle interfaces like BeanFactoryAware.
+            boolean earlySingletonExposure = definition.isSingleton() && this.allowCircularReferences &&
+                    isSingletonCurrentlyInCreation(beanName);
+            if (earlySingletonExposure) {
+                //这里与spring实现的不一样， spring原本是addSingletonFactory(beanName, () -> getEarlyBeanReference(beanName, mbd, bean));
+                //spring加的单例工厂在bean创建完后还是要删掉的, 而且代码两太大. 这里就不具体实现了,简单实现一下.
+                addSingletonBeanDefinition(beanName, exposedObject);
             }
+
+            //填充bean属性, 也就是自动注入.与PostProcessor事件
+            populateBean(beanName,definition,beanInstanceWrapper);
+            //执行我们自己定义的初始化方法, 与执行bean的生命周期方法与PostProcessor事件,
+            //例如: Aware接口, @PostConstruct,InitializingBean.afterPropertiesSet();
+            exposedObject = initializeBean(beanName, beanInstanceWrapper, definition);
             return exposedObject;
         }
 
@@ -1270,6 +1516,7 @@ public class ApplicationX {
         }
 
         protected BeanWrapper autowireConstructor(String beanName, BeanDefinition mbd, Constructor<?>[] ctors, Object[] explicitArgs) throws IllegalStateException{
+            int errorCount = 0;
             for (Constructor<?> constructor : ctors) {
                 InjectElement<Constructor<?>> element = new InjectElement<>(constructor, ApplicationX.this);
                 try {
@@ -1283,10 +1530,10 @@ public class ApplicationX {
                         return bw;
                     }
                 }catch (IllegalStateException e){
-                    //skip
+                    errorCount++;
                 }
             }
-            throw new IllegalStateException("can not create instances. "+Arrays.toString(ctors));
+            throw new IllegalStateException("can not create instances. "+Arrays.toString(ctors)+". " + singletonsCurrentlyInCreation);
         }
 
         protected Constructor<?>[] determineConstructorsFromBeanPostProcessors(Class<?> beanClass, String beanName)
@@ -1839,6 +2086,9 @@ public class ApplicationX {
         private final Collection<Class<? extends Annotation>> orderedAnnotations;
         public OrderComparator(Collection<Class<? extends Annotation>> orderedAnnotations) {
             this.orderedAnnotations = Objects.requireNonNull(orderedAnnotations);
+        }
+        public Collection<Class<? extends Annotation>> getOrderedAnnotations() {
+            return orderedAnnotations;
         }
         @Override
         public int compare(Object o1, Object o2) {

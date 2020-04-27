@@ -9,13 +9,13 @@ import com.example.beanfactory.service.Service;
 import com.example.beanfactory.util.ApplicationX.Autowired;
 
 @Service
-public class HelloServiceImpl extends AbstractService<HelloRepository, HelloPO,Integer> implements HelloService {
+public class SayHelloServiceImpl extends AbstractService<HelloRepository, HelloPO,Integer> implements SayHelloService {
     //解决注入的循环依赖
     @Autowired
-    private SayHelloService sayHelloService;
+    private HelloService helloService;
 
 //    无法解决构造器循环依赖
-//    public HelloServiceImpl(SayHelloService sayHelloService) {
-//        this.sayHelloService = sayHelloService;
+//    public SayHelloServiceImpl(HelloService helloService) {
+//        this.helloService = helloService;
 //    }
 }
