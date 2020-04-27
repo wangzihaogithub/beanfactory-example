@@ -2,6 +2,7 @@ package com.example.beanfactory.dao;
 
 import com.example.beanfactory.entity.HelloPO;
 import com.example.beanfactory.util.ApplicationX;
+import com.example.beanfactory.util.ApplicationX.*;
 
 import javax.annotation.PostConstruct;
 import java.util.ArrayList;
@@ -15,8 +16,8 @@ public class HelloRepository extends AbstractRepository<HelloPO,Integer>{
     private final Object testRequiredConstructor;
     private final ApplicationX app;
     public HelloRepository(
-            @ApplicationX.Autowired(required = false) Object object,
-            @ApplicationX.Autowired(required = true) ApplicationX app) {
+            @Autowired(required = false) Object object,
+            @Autowired(required = true) ApplicationX app) {
         this.testRequiredConstructor = object;
         this.app = app;
     }

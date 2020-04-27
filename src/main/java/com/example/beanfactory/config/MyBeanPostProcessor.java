@@ -1,9 +1,10 @@
 package com.example.beanfactory.config;
 
 import com.example.beanfactory.util.ApplicationX;
+import com.example.beanfactory.util.ApplicationX.*;
 
-@ApplicationX.Component
-@ApplicationX.Order(Integer.MIN_VALUE + 100)
+@Component
+@Order(Integer.MIN_VALUE + 100)
 public class MyBeanPostProcessor implements ApplicationX.BeanPostProcessor {
 
     @Override

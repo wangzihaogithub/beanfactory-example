@@ -4,17 +4,18 @@ import com.example.beanfactory.dao.HelloRepository;
 import com.example.beanfactory.entity.HelloPO;
 import com.example.beanfactory.service.HelloService;
 import com.example.beanfactory.util.ApplicationX;
+import com.example.beanfactory.util.ApplicationX.*;
 
 import javax.annotation.Resource;
 import javax.sql.DataSource;
 import java.util.List;
 
 @Controller
-public class HelloController implements ApplicationX.InitializingBean,ApplicationX.DisposableBean {
+public class HelloController implements InitializingBean,DisposableBean {
     private final HelloService helloService;
 
-    @ApplicationX.Autowired
-    @ApplicationX.Qualifier("myHelloRepository")
+    @Autowired
+    @Qualifier("myHelloRepository")
     private HelloRepository helloRepository;
     @Resource(name = "dataSource1")
     private DataSource dataSource;

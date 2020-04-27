@@ -2,10 +2,12 @@ package com.example.beanfactory;
 
 import com.example.beanfactory.controller.HelloController;
 import com.example.beanfactory.entity.HelloPO;
+import com.example.beanfactory.service.HiService;
 import com.example.beanfactory.util.ApplicationX;
 
 import javax.sql.DataSource;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 这是一个示例项目, 演示了这个小型容器的基本功能. 你可以通过它去学习spring的容器相关.
@@ -48,6 +50,11 @@ public class BeanfactoryApplication {
                 System.out.println(Thread.currentThread()+" DataSource("+(dataSource1+"@"+dataSource1.hashCode()+","+dataSource2+"@"+dataSource2.hashCode()) + "), equals=" + (dataSource1 == dataSource2));
 
                 HelloController controller = app.getBean("helloControllerAlias");
+
+                HiService hiService = app.getBean(HiService.class);
+                Objects.requireNonNull(hiService.getHelloService());
+                Objects.requireNonNull(hiService.getSayHelloService());
+
                 for (int i = 1; i <= 3; i++) {
                     HelloPO helloPO = controller.findById(i);
                     System.out.println(Thread.currentThread()+" findById = " + helloPO);

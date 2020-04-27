@@ -3,6 +3,7 @@ package com.example.beanfactory.service;
 import com.example.beanfactory.dao.AbstractRepository;
 import com.example.beanfactory.entity.AbstractPO;
 import com.example.beanfactory.util.ApplicationX;
+import com.example.beanfactory.util.ApplicationX.*;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -11,7 +12,7 @@ import java.util.List;
 public abstract class AbstractService <REPOSITORY extends AbstractRepository<PO,ID>,
                 PO extends AbstractPO,
                 ID extends Number> {
-    @ApplicationX.Autowired
+    @Autowired
     private ApplicationX app;
     private REPOSITORY repository;
 
@@ -33,7 +34,7 @@ public abstract class AbstractService <REPOSITORY extends AbstractRepository<PO,
         System.out.println(Thread.currentThread()+" "+getClass().getSimpleName() + " destroy");
     }
 
-    @ApplicationX.Autowired
+    @Autowired
     public void setRepository(REPOSITORY repository) {
         this.repository = repository;
         System.out.println(Thread.currentThread()+" "+getClass().getSimpleName() + " setRepository(" + repository+")");
