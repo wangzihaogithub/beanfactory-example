@@ -232,7 +232,7 @@ public class ApplicationX {
         return this.singletonsCurrentlyInCreation.contains(beanName);
     }
 
-    protected void addSingletonBeanDefinition(String beanName, Object singletonObject) {
+    protected void addSingleton(String beanName, Object singletonObject) {
         this.singletonObjects.put(beanName, singletonObject);
     }
 
@@ -605,7 +605,7 @@ public class ApplicationX {
                 AbstractBeanFactory beanFactory = getBeanFactory(beanClass);
                 instance = beanFactory.createBean(beanName, definition, args);
                 if (isSingleton) {
-                    addSingletonBeanDefinition(beanName, instance);
+                    addSingleton(beanName, instance);
                 }
             }finally {
                 if (isSingleton) {
@@ -1419,8 +1419,8 @@ public class ApplicationX {
                     isSingletonCurrentlyInCreation(beanName);
             if (earlySingletonExposure) {
                 //这里与spring实现的不一样， spring原本是addSingletonFactory(beanName, () -> getEarlyBeanReference(beanName, mbd, bean));
-                //spring加的单例工厂在bean创建完后还是要删掉的, 而且代码两太大. 这里就不具体实现了,简单实现一下.
-                addSingletonBeanDefinition(beanName, exposedObject);
+                //spring加的单例工厂在bean创建完后还是要删掉的, 而且代码量太大. 这里就不具体实现了,简单实现一下.
+                addSingleton(beanName, exposedObject);
             }
 
             //填充bean属性, 也就是自动注入.与PostProcessor事件
