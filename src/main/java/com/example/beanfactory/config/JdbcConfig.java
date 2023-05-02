@@ -29,7 +29,7 @@ public class JdbcConfig {
         return new MyPooledConnection();
     }
 
-//    @Primary
+    @Primary
     @Lazy
     @Scope("prototype")
 //    @Scope("singleton")
@@ -39,7 +39,7 @@ public class JdbcConfig {
         return new MyDataSource("dataSource1");
     }
 
-    @Primary
+//    @Primary
     @Lazy
 //    @Scope("prototype")
     @Scope("singleton")
